@@ -1,0 +1,101 @@
+FUNCTION_BLOCK SIM_BatteryModel
+VAR_INPUT
+    PowerCmd_MW : REAL; // + discharge, - charge
+    Pmax_MW : REAL;
+
+    E_Usable_MWh : REAL;
+    SOCmin_pct : REAL;
+    SOCmax_pct : REAL;
+
+    Dt_s : REAL;
+END_VAR
+
+VAR_IN_OUT
+    SOC_pct : REAL; // state carried by caller (GVL_PlantState)
+END_VAR
+
+VAR_OUTPUT
+    ActualPower_MW : REAL;   // after limiting
+    AvailableDis_MW : REAL;
+    AvailableChg_MW : REAL;
+END_VAR
+
+VAR
+    Dt_h : REAL;
+    E_MWh : REAL;       // 0..E_Usable
+    dE_MWh : REAL;
+    P : REAL;
+
+    Eroom_MWh : REAL;
+    PmaxByEnergy : REAL;
+    span_pct : REAL;
+END_VAR
+
+// Convert SOC -> usable energy
+E_MWh := ((SOC_pct - SOCmin_pct) / span_pct) * E_Usable_MWh;
+IF E_MWh < 0.0 THEN E_MWh := 0.0; END_IF
+IF E_MWh > E_Usable_MWh THEN E_MWh := E_Usable_MWh; END_IF
+
+// Availability based on SOC window
+IF SOC_pct > (SOCmin_pct + 0.001) THEN
+    AvailableDis_MW := Pmax_MW;
+ELSE
+    AvailableDis_MW := 0.0;
+END_IF
+
+IF SOC_pct < (SOCmax_pct - 0.001) THEN
+    AvailableChg_MW := Pmax_MW;
+ELSE
+    AvailableChg_MW := 0.0;
+END_IF
+
+// Limit command by Pmax
+P := PowerCmd_MW;
+IF P > Pmax_MW THEN P := Pmax_MW; END_IF
+IF P < -Pmax_MW THEN P := -Pmax_MW; END_IF
+
+// Limit by energy room this timestep
+IF Dt_h > 0.0 THEN
+    IF P > 0.0 THEN
+        // Discharge: cannot use more energy than stored
+        PmaxByEnergy := E_MWh / Dt_h;
+        IF P > PmaxByEnergy THEN P := PmaxByEnergy; END_IF
+    ELSIF P < 0.0 THEN
+        // Charge: cannot exceed remaining room
+        Eroom_MWh := E_Usable_MWh - E_MWh;
+        IF Eroom_MWh < 0.0 THEN Eroom_MWh := 0.0; END_IF
+        PmaxByEnergy := Eroom_MWh / Dt_h;
+        IF (-P) > PmaxByEnergy THEN P := -PmaxByEnergy; END_IF
+    END_IF
+END_IF
+
+Dt_h := Dt_s / 3600.0;
+span_pct := (SOCmax_pct - SOCmin_pct);
+IF span_pct <= 0.0 THEN span_pct := 1.0; END_IF
+
+// Enforce SOC bounds
+IF (P > 0.0) AND (AvailableDis_MW <= 0.0) THEN
+    P := 0.0;
+END_IF
+IF (P < 0.0) AND (AvailableChg_MW <= 0.0) THEN
+    P := 0.0;
+END_IF
+
+// Integrate usable energy (discharge reduces energy)
+dE_MWh := -P * Dt_h;
+E_MWh := E_MWh + dE_MWh;
+
+IF E_MWh < 0.0 THEN E_MWh := 0.0; END_IF
+IF E_MWh > E_Usable_MWh THEN E_MWh := E_Usable_MWh; END_IF
+
+// Back-calc SOC
+IF E_Usable_MWh <= 0.0 THEN
+    SOC_pct := SOCmin_pct;
+ELSE
+    SOC_pct := SOCmin_pct + (E_MWh / E_Usable_MWh) * span_pct;
+END_IF
+
+IF SOC_pct < SOCmin_pct THEN SOC_pct := SOCmin_pct; END_IF
+IF SOC_pct > SOCmax_pct THEN SOC_pct := SOCmax_pct; END_IF
+
+ActualPower_MW := P;
