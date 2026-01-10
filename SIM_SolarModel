@@ -1,0 +1,22 @@
+FUNCTION_BLOCK SIM_SolarModel
+VAR_INPUT
+    IsDay : BOOL;
+    Nameplate_MW : REAL;
+    Curtail_MW : REAL; // MW curtailed from available
+END_VAR
+
+VAR_OUTPUT
+    Available_MW : REAL;
+    Output_MW : REAL;
+END_VAR
+
+IF IsDay THEN
+    Available_MW := Nameplate_MW;
+ELSE
+    Available_MW := 0.0;
+END_IF
+
+// Output is available minus curtailment
+Output_MW := Available_MW - Curtail_MW;
+IF Output_MW < 0.0 THEN Output_MW := 0.0; END_IF
+IF Output_MW > Available_MW THEN Output_MW := Available_MW; END_IF
