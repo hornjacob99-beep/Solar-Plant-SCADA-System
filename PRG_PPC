@@ -1,0 +1,220 @@
+PROGRAM PRG_PPC
+VAR
+    ramp  : FB_RampLimiter;
+    alloc : FB_PowerAllocator;
+
+    solar : SIM_SolarModel;
+    batt  : SIM_BatteryModel;
+    fly   : SIM_FlywheelModel;
+    poi   : SIM_POI_Measurement;
+
+    allowCharge : BOOL;
+
+    // Local
+    dispatch_cmd : REAL;
+END_VAR
+
+// =====================================================
+// 1) Solar availability from day/night
+// =====================================================
+GVL_PlantState.SolarAvail_MW := SEL(GVL_PlantState.IsDay, 0.0, GVL_Constants.SOLAR_NAMEPLATE_MW);
+
+
+// =====================================================
+// 2) Dispatch source select (SCADA vs simulation)
+//    SCADA writes GVL_Dispatch.Dispatch_Command_MW
+// =====================================================
+IF GVL_Dispatch.UseSimDispatch THEN
+    GVL_PlantState.Dispatch_Requested_MW := GVL_Dispatch.SimDispatch_MW;
+ELSE
+    GVL_PlantState.Dispatch_Requested_MW := GVL_Dispatch.Dispatch_Command_MW;
+END_IF
+
+dispatch_cmd := GVL_PlantState.Dispatch_Requested_MW;
+
+
+// =====================================================
+// 3) Clamp dispatch to allowed range
+// =====================================================
+IF dispatch_cmd < GVL_Constants.DISPATCH_MIN_MW THEN
+    dispatch_cmd := GVL_Constants.DISPATCH_MIN_MW;
+ELSIF dispatch_cmd > GVL_Constants.DISPATCH_MAX_MW THEN
+    dispatch_cmd := GVL_Constants.DISPATCH_MAX_MW;
+END_IF
+GVL_PlantState.Dispatch_Clamped_MW := dispatch_cmd;
+
+
+// =====================================================
+// 4) Ramp-limit at POI (plant level)
+// =====================================================
+ramp(
+    Target_MW := dispatch_cmd,
+    Current_MW := GVL_PlantState.POI_Target_Ramped_MW,
+    RampLimit_MW_per_min := GVL_Constants.RAMP_LIMIT_MW_PER_MIN,
+    Dt_s := GVL_Constants.DT_s,
+    Enable := TRUE
+);
+GVL_PlantState.POI_Target_Ramped_MW := ramp.RampedTarget_MW;
+
+
+// =====================================================
+// 5) Charging policy
+// =====================================================
+allowCharge := GVL_PlantState.IsDay;
+IF (NOT GVL_PlantState.IsDay) AND GVL_PlantState.NoChargeAtNight THEN
+    allowCharge := FALSE;
+END_IF
+
+
+// =====================================================
+// 6) Allocate power (ramped target drives allocation)
+// =====================================================
+alloc(
+    POI_Target_MW := GVL_PlantState.POI_Target_Ramped_MW,
+    IsDay := GVL_PlantState.IsDay,
+    SolarAvail_MW := GVL_PlantState.SolarAvail_MW,
+
+    BESS_SOC_pct := GVL_PlantState.BESS_SOC_pct,
+    BESS_Pmax_MW := GVL_Constants.BESS_PMAX_MW,
+    BESS_SOCmin_pct := GVL_Constants.BESS_SOC_MIN_PCT,
+    BESS_SOCmax_pct := GVL_Constants.BESS_SOC_MAX_PCT,
+    BESS_E_Usable_MWh := GVL_Constants.BESS_E_USABLE_MWH,
+
+    FESS_E_MWh := GVL_PlantState.FESS_E_MWh,
+    FESS_Emax_MWh := GVL_Constants.FESS_E_MAX_MWH,
+    FESS_Pmax_MW := GVL_Constants.FESS_PMAX_MW,
+
+    AllowCharge := allowCharge
+);
+
+GVL_PlantState.SolarToPOI_MW      := alloc.SolarToPOI_MW;
+GVL_PlantState.BESS_PowerCmd_MW   := alloc.BESS_Cmd_MW;
+GVL_PlantState.FESS_PowerCmd_MW   := alloc.FESS_Cmd_MW;
+
+GVL_PlantState.SolarToCharge_MW   := alloc.SolarToCharge_MW;
+GVL_PlantState.ExcessPV_MW        := alloc.ExcessPV_MW;
+GVL_PlantState.SolarCurtailed_MW  := alloc.SolarCurtailed_MW;
+
+GVL_PlantState.Plant_Available_MW := alloc.PlantAvail_MW;
+GVL_PlantState.TrackingOK         := alloc.TrackingPossible;
+
+
+// =====================================================
+// 7) Solar model (produced after curtailment)
+// =====================================================
+solar(
+    IsDay := GVL_PlantState.IsDay,
+    Nameplate_MW := GVL_Constants.SOLAR_NAMEPLATE_MW,
+    Curtail_MW := GVL_PlantState.SolarCurtailed_MW
+);
+GVL_PlantState.SolarOutput_MW := solar.Output_MW;
+
+
+// =====================================================
+// 8) Asset models integrate (use allocator commands)
+// =====================================================
+
+// Battery (SOC is VAR_IN_OUT in the FB)
+batt(
+    PowerCmd_MW := GVL_PlantState.BESS_PowerCmd_MW,
+    Pmax_MW := GVL_Constants.BESS_PMAX_MW,
+    E_Usable_MWh := GVL_Constants.BESS_E_USABLE_MWH,
+    SOCmin_pct := GVL_Constants.BESS_SOC_MIN_PCT,
+    SOCmax_pct := GVL_Constants.BESS_SOC_MAX_PCT,
+    Dt_s := GVL_Constants.DT_s,
+    SOC_pct := GVL_PlantState.BESS_SOC_pct
+);
+
+GVL_PlantState.BESS_ActualPower_MW := batt.ActualPower_MW;
+GVL_PlantState.BESS_AvailDis_MW    := batt.AvailableDis_MW;
+GVL_PlantState.BESS_AvailChg_MW    := batt.AvailableChg_MW;
+
+
+// Flywheel (E_MWh is VAR_IN_OUT in the FB)
+fly(
+    PowerCmd_MW := GVL_PlantState.FESS_PowerCmd_MW,
+    Pmax_MW := GVL_Constants.FESS_PMAX_MW,
+    Emax_MWh := GVL_Constants.FESS_E_MAX_MWH,
+    Dt_s := GVL_Constants.DT_s,
+    E_MWh := GVL_PlantState.FESS_E_MWh
+);
+
+GVL_PlantState.FESS_ActualPower_MW := fly.ActualPower_MW;
+GVL_PlantState.FESS_AvailDis_MW    := fly.AvailableDis_MW;
+GVL_PlantState.FESS_AvailChg_MW    := fly.AvailableChg_MW;
+
+
+// =====================================================
+// 9) Asset modes for SCADA (0 idle, 1 charge, 2 discharge)
+// =====================================================
+IF GVL_PlantState.BESS_ActualPower_MW > 0.001 THEN
+    GVL_PlantState.BESS_Mode := 2;
+ELSIF GVL_PlantState.BESS_ActualPower_MW < -0.001 THEN
+    GVL_PlantState.BESS_Mode := 1;
+ELSE
+    GVL_PlantState.BESS_Mode := 0;
+END_IF
+
+IF GVL_PlantState.FESS_ActualPower_MW > 0.001 THEN
+    GVL_PlantState.FESS_Mode := 2;
+ELSIF GVL_PlantState.FESS_ActualPower_MW < -0.001 THEN
+    GVL_PlantState.FESS_Mode := 1;
+ELSE
+    GVL_PlantState.FESS_Mode := 0;
+END_IF
+
+
+// =====================================================
+// 10) POI measurement (only discharge contributes to POI export)
+// =====================================================
+poi(
+    SolarToPOI_MW := GVL_PlantState.SolarToPOI_MW,
+    BESS_ActualPower_MW := GVL_PlantState.BESS_ActualPower_MW,
+    FESS_ActualPower_MW := GVL_PlantState.FESS_ActualPower_MW
+);
+GVL_PlantState.POI_MW := poi.POI_MW;
+
+
+// =====================================================
+// 11) Tracking error
+// =====================================================
+GVL_PlantState.Tracking_Error_MW := GVL_PlantState.POI_Target_Ramped_MW - GVL_PlantState.POI_MW;
+
+
+// =====================================================
+// 12) Derived STATUS bits for SCADA
+// =====================================================
+GVL_PlantState.Solar_Available := (GVL_PlantState.IsDay) AND (GVL_PlantState.SolarAvail_MW > 0.1);
+GVL_PlantState.BESS_Available  := (GVL_PlantState.BESS_AvailDis_MW > 0.1);
+GVL_PlantState.FESS_Available  := (GVL_PlantState.FESS_AvailDis_MW > 0.1);
+
+GVL_PlantState.BESS_Charging    := (GVL_PlantState.BESS_Mode = 1);
+GVL_PlantState.BESS_Discharging := (GVL_PlantState.BESS_Mode = 2);
+GVL_PlantState.FESS_Charging    := (GVL_PlantState.FESS_Mode = 1);
+GVL_PlantState.FESS_Discharging := (GVL_PlantState.FESS_Mode = 2);
+
+GVL_PlantState.Plant_Saturated    := (GVL_PlantState.Dispatch_Clamped_MW > (GVL_PlantState.Plant_Available_MW + 0.1));
+GVL_PlantState.Plant_Tracking_OK  := GVL_PlantState.TrackingOK;
+
+
+// =====================================================
+// 13) Alarm BOOLs (SCADA alarm banner / history)
+// =====================================================
+
+// Dispatch / POI alarms
+GVL_PlantState.ALM_Dispatch_Not_Tracked := NOT GVL_PlantState.TrackingOK;
+GVL_PlantState.ALM_Plant_Saturated      := GVL_PlantState.Plant_Saturated;
+
+// Solar alarms
+GVL_PlantState.ALM_Solar_Unavailable := NOT GVL_PlantState.IsDay;
+GVL_PlantState.ALM_Solar_Curtailed   := (GVL_PlantState.SolarCurtailed_MW > 0.1);
+
+// BESS alarms (small margin to trip near limits)
+GVL_PlantState.ALM_BESS_Low_SOC     := (GVL_PlantState.BESS_SOC_pct <= (GVL_Constants.BESS_SOC_MIN_PCT + 0.5));
+GVL_PlantState.ALM_BESS_High_SOC    := (GVL_PlantState.BESS_SOC_pct >= (GVL_Constants.BESS_SOC_MAX_PCT - 0.5));
+GVL_PlantState.ALM_BESS_Unavailable := (GVL_PlantState.BESS_AvailDis_MW <= 0.1);
+
+// FESS alarms
+GVL_PlantState.ALM_FESS_Empty       := (GVL_PlantState.FESS_E_MWh <= 0.01);
+GVL_PlantState.ALM_FESS_Full        := (GVL_PlantState.FESS_E_MWh >= (GVL_Constants.FESS_E_MAX_MWH - 0.01));
+GVL_PlantState.ALM_FESS_Unavailable := (GVL_PlantState.FESS_AvailDis_MW <= 0.1);
