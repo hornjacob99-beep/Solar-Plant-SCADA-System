@@ -1,5 +1,6 @@
 # Solar Plant SCADA System (CODESYS)
 
+For Chapter 8 validation slide deck see file named "Chapter_8_Validation_Slide_Deck".
 This project is a simulated utility-scale **solar power plant SCADA and Power Plant Controller (PPC)** implemented in **CODESYS**.  
 It models dispatch-following behavior for a hybrid plant consisting of **Solar PV, Battery Energy Storage (BESS), and Flywheel Energy Storage (FESS)**, including ramp-rate enforcement, asset prioritization, charging logic, and operator-facing SCADA signals.
 
