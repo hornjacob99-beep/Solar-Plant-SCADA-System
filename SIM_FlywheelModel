@@ -1,0 +1,71 @@
+FUNCTION_BLOCK SIM_FlywheelModel
+VAR_INPUT
+    PowerCmd_MW : REAL; // + discharge, - charge
+    Pmax_MW : REAL;
+    Emax_MWh : REAL;
+    Dt_s : REAL;
+END_VAR
+
+VAR_IN_OUT
+    E_MWh : REAL; // state carried by caller (GVL_PlantState)
+END_VAR
+
+VAR_OUTPUT
+    ActualPower_MW : REAL;
+    AvailableDis_MW : REAL;
+    AvailableChg_MW : REAL;
+END_VAR
+
+VAR
+    Dt_h : REAL;
+    P : REAL;
+    dE_MWh : REAL;
+    Eroom_MWh : REAL;
+    PmaxByEnergy : REAL;
+END_VAR
+
+Dt_h := Dt_s / 3600.0;
+
+// Availability
+IF E_MWh > 0.0001 THEN
+    AvailableDis_MW := Pmax_MW;
+ELSE
+    AvailableDis_MW := 0.0;
+END_IF
+
+IF E_MWh < (Emax_MWh - 0.0001) THEN
+    AvailableChg_MW := Pmax_MW;
+ELSE
+    AvailableChg_MW := 0.0;
+END_IF
+
+// Limit command by Pmax
+P := PowerCmd_MW;
+IF P > Pmax_MW THEN P := Pmax_MW; END_IF
+IF P < -Pmax_MW THEN P := -Pmax_MW; END_IF
+
+// Limit by energy room this timestep
+IF Dt_h > 0.0 THEN
+    IF P > 0.0 THEN
+        PmaxByEnergy := E_MWh / Dt_h;
+        IF P > PmaxByEnergy THEN P := PmaxByEnergy; END_IF
+    ELSIF P < 0.0 THEN
+        Eroom_MWh := Emax_MWh - E_MWh;
+        IF Eroom_MWh < 0.0 THEN Eroom_MWh := 0.0; END_IF
+        PmaxByEnergy := Eroom_MWh / Dt_h;
+        IF (-P) > PmaxByEnergy THEN P := -PmaxByEnergy; END_IF
+    END_IF
+END_IF
+
+// Enforce bounds
+IF (P > 0.0) AND (AvailableDis_MW <= 0.0) THEN P := 0.0; END_IF
+IF (P < 0.0) AND (AvailableChg_MW <= 0.0) THEN P := 0.0; END_IF
+
+// Integrate (discharge reduces energy)
+dE_MWh := -P * Dt_h;
+E_MWh := E_MWh + dE_MWh;
+
+IF E_MWh < 0.0 THEN E_MWh := 0.0; END_IF
+IF E_MWh > Emax_MWh THEN E_MWh := Emax_MWh; END_IF
+
+ActualPower_MW := P;
