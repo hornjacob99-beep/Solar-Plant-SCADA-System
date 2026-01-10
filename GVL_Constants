@@ -1,0 +1,27 @@
+VAR_GLOBAL CONSTANT
+    // Task timing (set this to your MainTask actual cycle time)
+    DT_s : REAL := 0.5; // seconds
+
+    // Ramp limit at POI
+    RAMP_LIMIT_MW_PER_MIN : REAL := 10.0;
+
+    // Solar
+    SOLAR_NAMEPLATE_MW : REAL := 100.0;
+
+    // Battery (BESS)
+    BESS_PMAX_MW    : REAL := 50.0;
+    BESS_E_USABLE_MWH : REAL := 200.0;   // usable energy between SOCmin..SOCmax
+    BESS_SOC_MIN_PCT  : REAL := 10.0;
+    BESS_SOC_MAX_PCT  : REAL := 90.0;
+
+    // Flywheel (FESS)
+    FESS_PMAX_MW    : REAL := 10.0;
+    FESS_E_MAX_MWH  : REAL := 2.0;
+
+    // Dispatch bounds (command clamp)
+    DISPATCH_MIN_MW : REAL := 0.0;
+    DISPATCH_MAX_MW : REAL := 160.0;
+
+    // Small number for comparisons
+    EPS : REAL := 1e-6;
+END_VAR
