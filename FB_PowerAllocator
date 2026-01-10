@@ -1,0 +1,261 @@
+FUNCTION_BLOCK FB_PowerAllocator
+VAR_INPUT
+    POI_Target_MW : REAL;
+
+    IsDay : BOOL;
+    SolarAvail_MW : REAL;
+
+    // Battery state
+    BESS_SOC_pct : REAL;
+    BESS_Pmax_MW : REAL;
+    BESS_SOCmin_pct : REAL;
+    BESS_SOCmax_pct : REAL;
+    BESS_E_Usable_MWh : REAL; // energy between SOCmin..SOCmax
+
+    // Flywheel state
+    FESS_E_MWh : REAL;
+    FESS_Emax_MWh : REAL;
+    FESS_Pmax_MW : REAL;
+
+    // Policy
+    AllowCharge : BOOL; // false at night
+END_VAR
+
+VAR_OUTPUT
+    SolarToPOI_MW : REAL;
+
+    // + discharge, - charge
+    BESS_Cmd_MW : REAL;
+    FESS_Cmd_MW : REAL;
+
+    SolarToCharge_MW : REAL;
+    ExcessPV_MW : REAL;
+    SolarCurtailed_MW : REAL;
+
+    TrackingPossible : BOOL;
+    PlantAvail_MW : REAL;
+END_VAR
+
+VAR
+    RemDemand_MW : REAL;
+    PV_to_POI_MW : REAL;
+    Excess_MW : REAL;
+
+    BESS_AvailDis_MW : REAL;
+    BESS_AvailChg_MW : REAL;
+
+    FESS_AvailDis_MW : REAL;
+    FESS_AvailChg_MW : REAL;
+
+    Dt_h : REAL;
+    BESS_E_MWh : REAL;
+    BESS_Eroom_MWh : REAL;
+    FESS_Eroom_MWh : REAL;
+
+    FESS_Charge_MW : REAL;
+    BESS_Charge_MW : REAL;
+
+    BESS_Dis_MW : REAL;
+    FESS_Dis_MW : REAL;
+
+    MaxChgByEnergy_MW : REAL;
+
+    // Fix: guard SOC span denominator
+    span_pct : REAL;
+
+    // Fix: local nonnegative target
+    poi_target_nonneg : REAL;
+END_VAR
+
+// -------------------- Defaults --------------------
+SolarToPOI_MW := 0.0;
+BESS_Cmd_MW := 0.0;
+FESS_Cmd_MW := 0.0;
+SolarToCharge_MW := 0.0;
+ExcessPV_MW := 0.0;
+SolarCurtailed_MW := 0.0;
+TrackingPossible := TRUE;
+
+// Time conversion (uses global DT)
+Dt_h := GVL_Constants.DT_s / 3600.0;
+
+// Clamp target >= 0 inside allocator (safety)
+poi_target_nonneg := POI_Target_MW;
+IF poi_target_nonneg < 0.0 THEN
+    poi_target_nonneg := 0.0;
+END_IF
+
+// Guard SOC span
+span_pct := (BESS_SOCmax_pct - BESS_SOCmin_pct);
+IF span_pct <= 0.0 THEN
+    span_pct := 1.0;
+END_IF
+
+// -------------------- Availability (power-based) --------------------
+IF BESS_SOC_pct > (BESS_SOCmin_pct + 0.001) THEN
+    BESS_AvailDis_MW := BESS_Pmax_MW;
+ELSE
+    BESS_AvailDis_MW := 0.0;
+END_IF
+
+IF BESS_SOC_pct < (BESS_SOCmax_pct - 0.001) THEN
+    BESS_AvailChg_MW := BESS_Pmax_MW;
+ELSE
+    BESS_AvailChg_MW := 0.0;
+END_IF
+
+IF FESS_E_MWh > 0.0001 THEN
+    FESS_AvailDis_MW := FESS_Pmax_MW;
+ELSE
+    FESS_AvailDis_MW := 0.0;
+END_IF
+
+IF FESS_E_MWh < (FESS_Emax_MWh - 0.0001) THEN
+    FESS_AvailChg_MW := FESS_Pmax_MW;
+ELSE
+    FESS_AvailChg_MW := 0.0;
+END_IF
+
+// Plant instantaneous deliverable capability (approx, power-based)
+IF IsDay THEN
+    PlantAvail_MW := SolarAvail_MW + BESS_AvailDis_MW + FESS_AvailDis_MW;
+ELSE
+    PlantAvail_MW := BESS_AvailDis_MW + FESS_AvailDis_MW;
+END_IF
+
+// -------------------- Allocation --------------------
+IF IsDay THEN
+    // PV to POI limited by PV availability
+    PV_to_POI_MW := poi_target_nonneg;
+    IF PV_to_POI_MW > SolarAvail_MW THEN
+        PV_to_POI_MW := SolarAvail_MW;
+    END_IF
+
+    SolarToPOI_MW := PV_to_POI_MW;
+    RemDemand_MW := poi_target_nonneg - SolarToPOI_MW;
+
+    IF RemDemand_MW > 0.0 THEN
+        // Discharge path: PV -> BESS -> FESS
+        BESS_Dis_MW := RemDemand_MW;
+        IF BESS_Dis_MW > BESS_AvailDis_MW THEN
+            BESS_Dis_MW := BESS_AvailDis_MW;
+        END_IF
+        RemDemand_MW := RemDemand_MW - BESS_Dis_MW;
+
+        FESS_Dis_MW := RemDemand_MW;
+        IF FESS_Dis_MW > FESS_AvailDis_MW THEN
+            FESS_Dis_MW := FESS_AvailDis_MW;
+        END_IF
+        RemDemand_MW := RemDemand_MW - FESS_Dis_MW;
+
+        BESS_Cmd_MW := BESS_Dis_MW; // positive
+        FESS_Cmd_MW := FESS_Dis_MW; // positive
+
+        // No excess PV in this branch
+        ExcessPV_MW := 0.0;
+        SolarToCharge_MW := 0.0;
+        SolarCurtailed_MW := 0.0;
+
+        IF RemDemand_MW > 0.001 THEN
+            TrackingPossible := FALSE;
+        END_IF
+
+    ELSE
+        // Charging path: target below PV availability
+        Excess_MW := SolarAvail_MW - SolarToPOI_MW;
+        IF Excess_MW < 0.0 THEN Excess_MW := 0.0; END_IF
+        ExcessPV_MW := Excess_MW;
+
+        IF AllowCharge THEN
+            // ---- Charge FESS first ----
+            FESS_Eroom_MWh := FESS_Emax_MWh - FESS_E_MWh;
+            IF FESS_Eroom_MWh < 0.0 THEN FESS_Eroom_MWh := 0.0; END_IF
+
+            MaxChgByEnergy_MW := 0.0;
+            IF Dt_h > 0.0 THEN
+                MaxChgByEnergy_MW := FESS_Eroom_MWh / Dt_h;
+            END_IF
+
+            FESS_Charge_MW := Excess_MW;
+            IF FESS_Charge_MW > FESS_AvailChg_MW THEN FESS_Charge_MW := FESS_AvailChg_MW; END_IF
+            IF FESS_Charge_MW > MaxChgByEnergy_MW THEN FESS_Charge_MW := MaxChgByEnergy_MW; END_IF
+            IF FESS_Charge_MW < 0.0 THEN FESS_Charge_MW := 0.0; END_IF
+
+            Excess_MW := Excess_MW - FESS_Charge_MW;
+
+            // ---- Charge BESS next ----
+            // Convert SOC to usable energy window (guarded)
+            BESS_E_MWh := ((BESS_SOC_pct - BESS_SOCmin_pct) / span_pct) * BESS_E_Usable_MWh;
+            IF BESS_E_MWh < 0.0 THEN BESS_E_MWh := 0.0; END_IF
+            IF BESS_E_MWh > BESS_E_Usable_MWh THEN BESS_E_MWh := BESS_E_Usable_MWh; END_IF
+
+            BESS_Eroom_MWh := BESS_E_Usable_MWh - BESS_E_MWh;
+            IF BESS_Eroom_MWh < 0.0 THEN BESS_Eroom_MWh := 0.0; END_IF
+
+            MaxChgByEnergy_MW := 0.0;
+            IF Dt_h > 0.0 THEN
+                MaxChgByEnergy_MW := BESS_Eroom_MWh / Dt_h;
+            END_IF
+
+            BESS_Charge_MW := Excess_MW;
+            IF BESS_Charge_MW > BESS_AvailChg_MW THEN BESS_Charge_MW := BESS_AvailChg_MW; END_IF
+            IF BESS_Charge_MW > MaxChgByEnergy_MW THEN BESS_Charge_MW := MaxChgByEnergy_MW; END_IF
+            IF BESS_Charge_MW < 0.0 THEN BESS_Charge_MW := 0.0; END_IF
+
+            Excess_MW := Excess_MW - BESS_Charge_MW;
+
+            // Commands are negative for charging
+            FESS_Cmd_MW := -FESS_Charge_MW;
+            BESS_Cmd_MW := -BESS_Charge_MW;
+
+            SolarToCharge_MW := FESS_Charge_MW + BESS_Charge_MW;
+
+            // Anything left is curtailed, and keep energy accounting consistent
+            IF Excess_MW < 0.0 THEN Excess_MW := 0.0; END_IF
+            SolarCurtailed_MW := Excess_MW;
+
+            // Consistency clamp (optional safety)
+            // SolarCurtailed = SolarAvail - (SolarToPOI + SolarToCharge)
+            // (numerical rounding can make tiny negatives)
+            IF SolarCurtailed_MW < 0.0 THEN SolarCurtailed_MW := 0.0; END_IF
+
+        ELSE
+            // Charge disallowed
+            SolarToCharge_MW := 0.0;
+            SolarCurtailed_MW := Excess_MW;
+        END_IF
+
+        TrackingPossible := TRUE;
+    END_IF
+
+ELSE
+    // Night: PV = 0, no charging
+    SolarToPOI_MW := 0.0;
+    ExcessPV_MW := 0.0;
+    SolarToCharge_MW := 0.0;
+    SolarCurtailed_MW := 0.0;
+
+    RemDemand_MW := poi_target_nonneg;
+
+    // Discharge path: BESS -> FESS
+    BESS_Dis_MW := RemDemand_MW;
+    IF BESS_Dis_MW > BESS_AvailDis_MW THEN
+        BESS_Dis_MW := BESS_AvailDis_MW;
+    END_IF
+    RemDemand_MW := RemDemand_MW - BESS_Dis_MW;
+
+    FESS_Dis_MW := RemDemand_MW;
+    IF FESS_Dis_MW > FESS_AvailDis_MW THEN
+        FESS_Dis_MW := FESS_AvailDis_MW;
+    END_IF
+    RemDemand_MW := RemDemand_MW - FESS_Dis_MW;
+
+    BESS_Cmd_MW := BESS_Dis_MW;
+    FESS_Cmd_MW := FESS_Dis_MW;
+
+    IF RemDemand_MW > 0.001 THEN
+        TrackingPossible := FALSE;
+    ELSE
+        TrackingPossible := TRUE;
+    END_IF
+END_IF
