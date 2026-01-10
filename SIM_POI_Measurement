@@ -1,0 +1,25 @@
+FUNCTION_BLOCK SIM_POI_Measurement
+VAR_INPUT
+    SolarToPOI_MW : REAL;
+    BESS_ActualPower_MW : REAL; // + discharge, - charge
+    FESS_ActualPower_MW : REAL; // + discharge, - charge
+END_VAR
+
+VAR_OUTPUT
+    POI_MW : REAL;
+END_VAR
+
+VAR
+    bess_dis : REAL;
+    fess_dis : REAL;
+END_VAR
+
+// Only discharge contributes to POI export in this simplified model
+bess_dis := BESS_ActualPower_MW;
+IF bess_dis < 0.0 THEN bess_dis := 0.0; END_IF
+
+fess_dis := FESS_ActualPower_MW;
+IF fess_dis < 0.0 THEN fess_dis := 0.0; END_IF
+
+POI_MW := SolarToPOI_MW + bess_dis + fess_dis;
+IF POI_MW < 0.0 THEN POI_MW := 0.0; END_IF
