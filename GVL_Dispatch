@@ -1,0 +1,15 @@
+VAR_GLOBAL
+    // Operator / SCADA knob (what you write in Watch/SCADA)
+    Dispatch_Command_MW : REAL := 0.0;   // requested dispatch setpoint
+
+    // Optional simulated dispatcher enable
+    UseSimDispatch : BOOL := FALSE;
+
+    // Simple simulated dispatcher profile
+    SimStep1_MW    : REAL := 80.0;
+    SimStep2_MW    : REAL := 160.0;
+    SimStepTime_s  : REAL := 120.0;      // after this many seconds switch to step2
+
+    // Simulation output (written by SIM_DispatchSource)
+    SimDispatch_MW : REAL := 0.0;
+END_VAR
