@@ -1,0 +1,89 @@
+VAR_GLOBAL
+    // =========================
+    // Mode / Policy
+    // =========================
+    IsDay : BOOL := TRUE;              // Day/Night toggle
+    NoChargeAtNight : BOOL := TRUE;    // Policy: no grid/PV charging at night
+
+    // =========================
+    // Dispatch / POI
+    // =========================
+    Dispatch_Requested_MW : REAL := 0.0; // from SIM_DispatchSource
+    Dispatch_Clamped_MW   : REAL := 0.0; // 0..160 clamp
+    POI_Target_Ramped_MW  : REAL := 0.0; // ramp-limited POI target
+    POI_MW                : REAL := 0.0; // measured at POI
+    Tracking_Error_MW     : REAL := 0.0; // POI_Target_Ramped - POI_MW
+    TrackingOK            : BOOL := TRUE;
+
+    // =========================
+    // Solar (PV)
+    // =========================
+    SolarAvail_MW     : REAL := 0.0;   // 100 day / 0 night
+    SolarOutput_MW    : REAL := 0.0;   // produced after curtailment (to POI + charging)
+    SolarToPOI_MW     : REAL := 0.0;   // PV contribution to POI
+    SolarToCharge_MW  : REAL := 0.0;   // PV used to charge storage (behind-the-meter)
+    ExcessPV_MW       : REAL := 0.0;   // SolarAvail - SolarToPOI
+    SolarCurtailed_MW : REAL := 0.0;   // SolarAvail - (SolarToPOI + SolarToCharge)
+
+    // =========================
+    // BESS
+    // =========================
+    BESS_SOC_pct          : REAL := 50.0;
+    BESS_PowerCmd_MW      : REAL := 0.0; // + discharge, - charge
+    BESS_ActualPower_MW   : REAL := 0.0; // after internal limiting
+    BESS_AvailDis_MW      : REAL := 0.0;
+    BESS_AvailChg_MW      : REAL := 0.0;
+    BESS_Mode             : INT := 0;    // 0 idle, 1 charge, 2 discharge
+
+    // =========================
+    // FESS
+    // =========================
+    FESS_E_MWh            : REAL := 0.0;
+    FESS_PowerCmd_MW      : REAL := 0.0; // + discharge, - charge
+    FESS_ActualPower_MW   : REAL := 0.0; // after internal limiting
+    FESS_AvailDis_MW      : REAL := 0.0;
+    FESS_AvailChg_MW      : REAL := 0.0;
+    FESS_Mode             : INT := 0;    // 0 idle, 1 charge, 2 discharge
+
+    // =========================
+    // Plant capability summary
+    // =========================
+    Plant_Available_MW    : REAL := 0.0; // max deliverable right now (approx, power-based)
+
+    // =========================================================
+    // SCADA-friendly STATUS bits (derived in PRG_PPC)
+    // =========================================================
+    Solar_Available  : BOOL := FALSE; // IsDay AND SolarAvail_MW > 0
+    BESS_Available   : BOOL := FALSE; // BESS_AvailDis_MW > 0
+    FESS_Available   : BOOL := FALSE; // FESS_AvailDis_MW > 0
+
+    BESS_Charging    : BOOL := FALSE; // BESS_Mode = 1
+    BESS_Discharging : BOOL := FALSE; // BESS_Mode = 2
+    FESS_Charging    : BOOL := FALSE; // FESS_Mode = 1
+    FESS_Discharging : BOOL := FALSE; // FESS_Mode = 2
+
+    Plant_Saturated  : BOOL := FALSE; // Dispatch request > plant available
+    Plant_Tracking_OK : BOOL := TRUE; // alias/duplicate of TrackingOK for SCADA
+
+    // =========================================================
+    // ALARMS (BOOL points for SCADA alarm banner / history)
+    // =========================================================
+
+    // Dispatch / POI alarms
+    ALM_Dispatch_Not_Tracked : BOOL := FALSE; // NOT TrackingOK
+    ALM_Plant_Saturated      : BOOL := FALSE; // Dispatch_Requested > Plant_Available
+
+    // Solar alarms
+    ALM_Solar_Curtailed      : BOOL := FALSE; // SolarCurtailed > threshold
+    ALM_Solar_Unavailable    : BOOL := FALSE; // NOT IsDay (night)
+
+    // BESS alarms
+    ALM_BESS_Low_SOC         : BOOL := FALSE; // near SOCmin
+    ALM_BESS_High_SOC        : BOOL := FALSE; // near SOCmax
+    ALM_BESS_Unavailable     : BOOL := FALSE; // cannot discharge (SOC at min)
+
+    // FESS alarms
+    ALM_FESS_Empty           : BOOL := FALSE; // near empty
+    ALM_FESS_Full            : BOOL := FALSE; // near full
+    ALM_FESS_Unavailable     : BOOL := FALSE; // cannot discharge (empty)
+END_VAR
