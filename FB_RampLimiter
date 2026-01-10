@@ -1,0 +1,44 @@
+FUNCTION_BLOCK FB_RampLimiter
+VAR_INPUT
+    Target_MW : REAL;
+    Current_MW : REAL;
+    RampLimit_MW_per_min : REAL;
+    Dt_s : REAL;
+    Enable : BOOL := TRUE;
+END_VAR
+
+VAR_OUTPUT
+    RampedTarget_MW : REAL;
+    AppliedDelta_MW : REAL;
+END_VAR
+
+VAR
+    MaxDelta_MW : REAL;
+    Err_MW : REAL;
+    Delta_MW : REAL;
+END_VAR
+
+IF NOT Enable THEN
+    RampedTarget_MW := Target_MW;
+    AppliedDelta_MW := Target_MW - Current_MW;
+ELSE
+    IF Dt_s <= 0.0 THEN
+        RampedTarget_MW := Current_MW;
+        AppliedDelta_MW := 0.0;
+    ELSE
+        MaxDelta_MW := (RampLimit_MW_per_min / 60.0) * Dt_s;
+        Err_MW := Target_MW - Current_MW;
+
+        // Limit delta
+        IF Err_MW > MaxDelta_MW THEN
+            Delta_MW := MaxDelta_MW;
+        ELSIF Err_MW < -MaxDelta_MW THEN
+            Delta_MW := -MaxDelta_MW;
+        ELSE
+            Delta_MW := Err_MW;
+        END_IF
+
+        RampedTarget_MW := Current_MW + Delta_MW;
+        AppliedDelta_MW := Delta_MW;
+    END_IF
+END_IF
