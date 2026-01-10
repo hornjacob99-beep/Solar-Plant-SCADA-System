@@ -1,0 +1,32 @@
+PROGRAM SIM_DispatchSource
+VAR
+    t_s : REAL := 0.0;
+    cmd : REAL := 0.0;
+END_VAR
+
+// Simple time base
+t_s := t_s + GVL_Constants.DT_s;
+
+// Generate simulated dispatch command ONLY when UseSimDispatch is TRUE.
+// Otherwise hold SimDispatch_MW at its last value or mirror manual.
+// Here we mirror manual so it's always sane for watching.
+IF GVL_Dispatch.UseSimDispatch THEN
+    IF t_s < GVL_Dispatch.SimStepTime_s THEN
+        cmd := GVL_Dispatch.SimStep1_MW;
+    ELSE
+        cmd := GVL_Dispatch.SimStep2_MW;
+    END_IF
+ELSE
+    // When sim is disabled, mirror operator command (optional but convenient)
+    cmd := GVL_Dispatch.Dispatch_Command_MW;
+END_IF
+
+// Clamp to 0..160
+IF cmd < GVL_Constants.DISPATCH_MIN_MW THEN
+    cmd := GVL_Constants.DISPATCH_MIN_MW;
+ELSIF cmd > GVL_Constants.DISPATCH_MAX_MW THEN
+    cmd := GVL_Constants.DISPATCH_MAX_MW;
+END_IF
+
+// Write ONLY to GVL_Dispatch
+GVL_Dispatch.SimDispatch_MW := cmd;
